@@ -72,7 +72,7 @@ cd frontend
 npm run dev
 ```
 
-La aplicación se abrirá en `http://localhost:5173`
+La aplicación se abrirá en `http://localhost:3000`
 
 ### 3. Usar la Aplicación
 
@@ -163,7 +163,7 @@ Si algunos PDFs no se convierten correctamente:
 Si hay problemas de conexión entre frontend y backend:
 1. Verifica que ambos servidores estén ejecutándose
 2. El backend incluye configuración CORS automática
-3. Asegúrate de usar los puertos correctos (3002 para backend, 5173 para frontend)
+3. Asegúrate de usar los puertos correctos (3002 para backend, 3000 para frontend)
 
 ## 📝 Notas de Desarrollo
 
