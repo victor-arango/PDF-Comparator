@@ -1,0 +1,12 @@
+{
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+  "dev": "concurrently \"npm --workspace backend run dev\" \"npm --workspace frontend run dev\""
+},
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
