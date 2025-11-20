@@ -185,6 +185,16 @@ try {
 }
 });
 
+app.get("/api/download-report", async (req, res) => {
+  try {
+    const pdfComparator = new PDFComparator();
+    return pdfComparator.DonwloadPDFReport(res);
+
+  } catch (error) {
+    console.error("Error en el endpoint /api/download-report:", error);
+    return res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
 
 
 // Servir resultados estáticos

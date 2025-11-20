@@ -26,23 +26,31 @@ export default function ComparisonResult({
   } = comparisonData || {};
 
   const handleDownloadReport = async () => {
-    try {
-      if (reportUrl) {
-        const filename = reportUrl.split('/').pop();
-        const response = await fetch(`/api/download-report/${filename}`);
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `comparacion-pdfs-${Date.now()}.html`;
-        a.click();
-        window.URL.revokeObjectURL(url);
-      }
-    } catch (error) {
-      console.error('Error descargando reporte:', error);
-      alert('Error al descargar el reporte. Por favor, intenta nuevamente.');
+  try {
+    const response = await fetch("/api/download-report");
+
+    if (!response.ok) {
+      throw new Error("Error al descargar el PDF");
     }
-  };
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `comparacion-pdfs-${Date.now()}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    window.URL.revokeObjectURL(url);
+
+  } catch (error) {
+    console.error("Error descargando reporte:", error);
+    alert("Error al descargar el reporte. Por favor, intenta nuevamente.");
+  }
+};
+
 
   const cleanFolders = async () => {
     try {
@@ -251,13 +259,13 @@ export default function ComparisonResult({
             className="h-14 flex-1 rounded-3xl border-slate-200 bg-white text-base font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
           >
             <Download className="size-5" />
-            Descargar Reporte HTML
+            Descargar Reporte PFD
           </Button>
         </section>
 
         <section className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm text-slate-500 shadow-sm">
           <span className="text-lg">💡</span>
-          <p>El reporte HTML incluye los PDFs completos y puede abrirse en cualquier navegador.</p>
+          <p>El reporte PDF contiene los cambios encontrados y puede abrirse en cualquier navegador.</p>
         </section>
       </div>
     </div>

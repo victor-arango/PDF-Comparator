@@ -2,15 +2,29 @@ import { PDFDocument } from "pdf-lib";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
-import pkg from 'odiff-bin';
+import { fileURLToPath } from 'url';
+import pkg from "odiff-bin";
 const { compare: compareImages } = pkg;
-import pdfPoppler from 'pdf-poppler';
-import sharp from 'sharp';
+import pdfPoppler from "pdf-poppler";
+import sharp from "sharp";
+import puppeteer from "puppeteer";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 
 const REMOVE_OUTPUT = "./output";
 const REMOVE_REPORTS = "./reports";
 const REMOVE_UPLOADS = "./uploads";
+const REMOVE_TMP = "./tmp";
+
+ // Configuración de Puppeteer
+    const launchOptions = {
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+      timeout: 5000,
+      userDataDir: `./tmp/puppeteer_${Date.now()}` // carpeta única
+    };
 
 /**
  * Clase para comparar PDFs generando diffs visuales mejorados
@@ -24,7 +38,7 @@ export class PDFComparator {
       // Nuevas opciones para resaltado
       highlightColor: options.highlightColor || { r: 255, g: 0, b: 0 }, // Rojo
       highlightOpacity: options.highlightOpacity || 0.5,
-      blendMode: options.blendMode || 'overlay', // 'overlay', 'multiply', 'screen'
+      blendMode: options.blendMode || "overlay", // 'overlay', 'multiply', 'screen'
       ...options,
     };
     this.popplerAvailable = null;
@@ -36,26 +50,26 @@ export class PDFComparator {
     }
 
     try {
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
+      const { exec } = await import("child_process");
+      const { promisify } = await import("util");
       const execAsync = promisify(exec);
-      
-      await execAsync('pdftoppm -v');
-      console.log('✅ Poppler está instalado y disponible');
+
+      await execAsync("pdftoppm -v");
+      console.log("✅ Poppler está instalado y disponible");
       this.popplerAvailable = true;
       return true;
     } catch (error) {
       try {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
         const execAsync = promisify(exec);
-        
-        await execAsync('pdfinfo -v');
-        console.log('✅ Poppler está instalado (verificado con pdfinfo)');
+
+        await execAsync("pdfinfo -v");
+        console.log("✅ Poppler está instalado (verificado con pdfinfo)");
         this.popplerAvailable = true;
         return true;
       } catch (pdfinfoError) {
-        console.log('❌ Poppler NO está instalado');
+        console.log("❌ Poppler NO está instalado");
         this.popplerAvailable = false;
         return false;
       }
@@ -69,13 +83,13 @@ export class PDFComparator {
   async compare(originalPath, modifiedPath, outputDir = "./output") {
     try {
       console.log("🔍 Iniciando comparación de PDFs...");
-      
+
       const popplerInstalled = await this.checkPopplerInstallation();
-      
+
       if (!popplerInstalled) {
         console.log("⚠️ Continuando con funcionalidad limitada");
       }
-      
+
       this.validateFiles(originalPath, modifiedPath);
       await this.ensureDirectory(outputDir);
 
@@ -100,22 +114,26 @@ export class PDFComparator {
       console.log("⚖️ Comparando páginas...");
       console.log(`  📄 Imágenes originales: ${originalImages.length}`);
       console.log(`  📄 Imágenes modificadas: ${modifiedImages.length}`);
-      
+
       const differences = await this.compareAllPages(
         originalImages,
         modifiedImages,
         outputDir
       );
-      
+
       // Validación: verificar que se hayan procesado todas las páginas
       const processedPages = differences.length;
       if (processedPages !== maxPages) {
-        console.warn(`  ⚠️ ADVERTENCIA: Se procesaron ${processedPages} páginas pero se esperaban ${maxPages}`);
+        console.warn(
+          `  ⚠️ ADVERTENCIA: Se procesaron ${processedPages} páginas pero se esperaban ${maxPages}`
+        );
       }
-      
+
       // Logging de resumen de diferencias
-      const pagesWithDiffs = differences.filter(d => d.hasDifference).length;
-      console.log(`  📊 Resumen: ${pagesWithDiffs} de ${processedPages} páginas tienen diferencias`);
+      const pagesWithDiffs = differences.filter((d) => d.hasDifference).length;
+      console.log(
+        `  📊 Resumen: ${pagesWithDiffs} de ${processedPages} páginas tienen diferencias`
+      );
 
       const reportPath = await this.generateReport(differences, outputDir, {
         originalPath,
@@ -123,6 +141,9 @@ export class PDFComparator {
         originalPages,
         modifiedPages,
       });
+
+      
+      const pdfConverterPath = await this.generatePDFFromHTML(reportPath, outputDir = "./output")
 
       const summary = this.generateSummary(differences, maxPages);
       console.log("\n" + summary);
@@ -135,7 +156,8 @@ export class PDFComparator {
         summary,
         stats: {
           totalPages: maxPages,
-          pagesWithDifferences: differences.filter((d) => d.hasDifference).length,
+          pagesWithDifferences: differences.filter((d) => d.hasDifference)
+            .length,
           identicalPages: differences.filter((d) => !d.hasDifference).length,
         },
       };
@@ -163,9 +185,13 @@ export class PDFComparator {
 
   async convertPDFToImages(pdfPath, outputDir, prefix) {
     const popplerInstalled = await this.checkPopplerInstallation();
-    
+
     if (popplerInstalled) {
-      return await this.convertPDFToImagesWithPoppler(pdfPath, outputDir, prefix);
+      return await this.convertPDFToImagesWithPoppler(
+        pdfPath,
+        outputDir,
+        prefix
+      );
     } else {
       return await this.createPlaceholderImages(pdfPath, outputDir, prefix);
     }
@@ -176,24 +202,24 @@ export class PDFComparator {
     await this.ensureDirectory(imagesDir);
 
     console.log(`🌀 Generando imágenes para ${prefix} con Poppler...`);
-    
+
     try {
       const pdfBytes = await fs.readFile(pdfPath);
       const pdf = await PDFDocument.load(pdfBytes);
       const pages = pdf.getPageCount();
 
       const imageFiles = [];
-      
+
       const options = {
-        format: 'png',
+        format: "png",
         out_dir: imagesDir,
-        out_prefix: 'page',
+        out_prefix: "page",
         page: null, // null = todas las páginas
         // Agregar opciones adicionales para mejor compatibilidad
         first_page: 1,
         last_page: pages,
       };
-      
+
       // Agregar DPI si está configurado
       if (this.options.dpi) {
         options.dpi = this.options.dpi;
@@ -204,20 +230,26 @@ export class PDFComparator {
       console.log(`     Directorio de salida: ${imagesDir}`);
       console.log(`     Prefijo: ${options.out_prefix}`);
       console.log(`     Formato: ${options.format}`);
-      
+
       // Verificar que el PDF existe
-      const pdfExists = await fs.access(pdfPath).then(() => true).catch(() => false);
+      const pdfExists = await fs
+        .access(pdfPath)
+        .then(() => true)
+        .catch(() => false);
       if (!pdfExists) {
         throw new Error(`El archivo PDF no existe: ${pdfPath}`);
       }
-      
+
       // Verificar que el directorio existe
-      const dirExists = await fs.access(imagesDir).then(() => true).catch(() => false);
+      const dirExists = await fs
+        .access(imagesDir)
+        .then(() => true)
+        .catch(() => false);
       if (!dirExists) {
         console.warn(`     ⚠️ El directorio no existe, intentando crearlo...`);
         await this.ensureDirectory(imagesDir);
       }
-      
+
       try {
         await pdfPoppler.convert(pdfPath, options);
         console.log(`     ✅ Conversión completada`);
@@ -226,36 +258,42 @@ export class PDFComparator {
         console.error(`     Stack:`, convertError.stack);
         throw convertError;
       }
-      
+
       // Listar todos los archivos generados para debugging
       let allFiles = [];
       try {
         allFiles = await fs.readdir(imagesDir);
-        console.log(`     Archivos generados en el directorio (${allFiles.length} total):`, allFiles);
+        console.log(
+          `     Archivos generados en el directorio (${allFiles.length} total):`,
+          allFiles
+        );
       } catch (dirError) {
-        console.warn(`     ⚠️ No se pudo leer el directorio:`, dirError.message);
+        console.warn(
+          `     ⚠️ No se pudo leer el directorio:`,
+          dirError.message
+        );
       }
-      
+
       // Filtrar solo archivos PNG
-      const pngFiles = allFiles.filter(f => f.toLowerCase().endsWith('.png'));
+      const pngFiles = allFiles.filter((f) => f.toLowerCase().endsWith(".png"));
       console.log(`     Archivos PNG encontrados: ${pngFiles.length}`);
-      
+
       // pdf-poppler puede generar archivos con diferentes formatos de nombre
       // Intentar diferentes variaciones: page-1.png, page1.png, page_1.png, etc.
       for (let i = 1; i <= pages; i++) {
         const possibleNames = [
-          `page-${i}.png`,      // page-1.png
-          `page${i}.png`,      // page1.png
-          `page_${i}.png`,     // page_1.png
-          `page-${String(i).padStart(2, '0')}.png`, // page-01.png
-          `page${String(i).padStart(2, '0')}.png`,  // page01.png
-          `page-${String(i).padStart(3, '0')}.png`, // page-001.png
+          `page-${i}.png`, // page-1.png
+          `page${i}.png`, // page1.png
+          `page_${i}.png`, // page_1.png
+          `page-${String(i).padStart(2, "0")}.png`, // page-01.png
+          `page${String(i).padStart(2, "0")}.png`, // page01.png
+          `page-${String(i).padStart(3, "0")}.png`, // page-001.png
         ];
-        
+
         let imagePath = null;
         let found = false;
         let foundFileName = null;
-        
+
         // Buscar el archivo con cualquiera de los nombres posibles
         for (const fileName of possibleNames) {
           if (allFiles.includes(fileName)) {
@@ -265,10 +303,10 @@ export class PDFComparator {
             break;
           }
         }
-        
+
         if (!found && pngFiles.length > 0) {
           // Si no se encontró con nombres esperados, buscar por número en el nombre
-          const matchingFile = pngFiles.find(f => {
+          const matchingFile = pngFiles.find((f) => {
             // Buscar números en el nombre del archivo
             const match = f.match(/(\d+)/);
             if (match) {
@@ -277,37 +315,50 @@ export class PDFComparator {
             }
             return false;
           });
-          
+
           if (matchingFile) {
             imagePath = path.join(imagesDir, matchingFile);
             found = true;
             foundFileName = matchingFile;
-            console.log(`    🔍 Página ${i} encontrada con nombre alternativo: ${matchingFile}`);
+            console.log(
+              `    🔍 Página ${i} encontrada con nombre alternativo: ${matchingFile}`
+            );
           }
         }
-        
+
         if (found && imagePath) {
           // Verificar que el archivo realmente existe y tiene contenido
           try {
             const stats = await fs.stat(imagePath);
             if (stats.size > 0) {
               imageFiles.push(imagePath);
-              console.log(`    ✓ Página ${i} convertida: ${foundFileName} (${stats.size} bytes)`);
+              console.log(
+                `    ✓ Página ${i} convertida: ${foundFileName} (${stats.size} bytes)`
+              );
             } else {
-              console.warn(`    ⚠️ Página ${i}: archivo encontrado pero está vacío (${foundFileName})`);
+              console.warn(
+                `    ⚠️ Página ${i}: archivo encontrado pero está vacío (${foundFileName})`
+              );
               const expectedPath = path.join(imagesDir, `page-${i}.png`);
               await this.createPlaceholderImage(expectedPath, i);
               imageFiles.push(expectedPath);
             }
           } catch (statError) {
-            console.warn(`    ⚠️ Página ${i}: error verificando archivo ${foundFileName}:`, statError.message);
+            console.warn(
+              `    ⚠️ Página ${i}: error verificando archivo ${foundFileName}:`,
+              statError.message
+            );
             const expectedPath = path.join(imagesDir, `page-${i}.png`);
             await this.createPlaceholderImage(expectedPath, i);
             imageFiles.push(expectedPath);
           }
         } else {
-          console.warn(`    ⚠️ Página ${i} no se convirtió - creando placeholder`);
-          console.warn(`       Archivos disponibles: ${pngFiles.join(', ') || 'ninguno'}`);
+          console.warn(
+            `    ⚠️ Página ${i} no se convirtió - creando placeholder`
+          );
+          console.warn(
+            `       Archivos disponibles: ${pngFiles.join(", ") || "ninguno"}`
+          );
           // Crear placeholder con el nombre esperado
           const expectedPath = path.join(imagesDir, `page-${i}.png`);
           await this.createPlaceholderImage(expectedPath, i);
@@ -352,19 +403,19 @@ export class PDFComparator {
         Placeholder - Instalar Poppler
       </text>
     </svg>`;
-    
+
     // Crear tanto SVG como PNG placeholder
-    const svgPath = imagePath.replace('.png', '.svg');
+    const svgPath = imagePath.replace(".png", ".svg");
     await fs.writeFile(svgPath, svgContent);
-    
+
     // Convertir SVG a PNG usando sharp si está disponible
     try {
       const svgBuffer = Buffer.from(svgContent);
-      await sharp(svgBuffer)
-        .png()
-        .toFile(imagePath);
+      await sharp(svgBuffer).png().toFile(imagePath);
     } catch (error) {
-      console.warn(`No se pudo convertir SVG a PNG para página ${pageNum}, solo se guardó SVG`);
+      console.warn(
+        `No se pudo convertir SVG a PNG para página ${pageNum}, solo se guardó SVG`
+      );
     }
   }
 
@@ -383,16 +434,23 @@ export class PDFComparator {
       const modifiedImg = modifiedImages[i];
 
       // Asegurar que siempre tengamos rutas, incluso si las imágenes no existen
-      const originalImagePath = originalImg || path.join(outputDir, "images", "original", `page-${pageNum}.png`);
-      const modifiedImagePath = modifiedImg || path.join(outputDir, "images", "modified", `page-${pageNum}.png`);
+      const originalImagePath =
+        originalImg ||
+        path.join(outputDir, "images", "original", `page-${pageNum}.png`);
+      const modifiedImagePath =
+        modifiedImg ||
+        path.join(outputDir, "images", "modified", `page-${pageNum}.png`);
       const diffPath = path.join(diffDir, `diff-page-${pageNum}.png`);
-      const highlightPath = path.join(highlightDir, `highlight-page-${pageNum}.png`);
+      const highlightPath = path.join(
+        highlightDir,
+        `highlight-page-${pageNum}.png`
+      );
 
       if (!originalImg || !modifiedImg) {
         // Asegurar que existan los directorios
         await this.ensureDirectory(path.dirname(originalImagePath));
         await this.ensureDirectory(path.dirname(modifiedImagePath));
-        
+
         results.push({
           page: pageNum,
           hasDifference: true,
@@ -408,13 +466,23 @@ export class PDFComparator {
       }
 
       try {
-        const originalExists = await fs.access(originalImg).then(() => true).catch(() => false);
-        const modifiedExists = await fs.access(modifiedImg).then(() => true).catch(() => false);
-        
+        const originalExists = await fs
+          .access(originalImg)
+          .then(() => true)
+          .catch(() => false);
+        const modifiedExists = await fs
+          .access(modifiedImg)
+          .then(() => true)
+          .catch(() => false);
+
         if (!originalExists || !modifiedExists) {
           console.warn(`  ⚠️ Página ${pageNum}: Imagen no encontrada`);
-          console.warn(`     Original existe: ${originalExists} - ${originalImg}`);
-          console.warn(`     Modified existe: ${modifiedExists} - ${modifiedImg}`);
+          console.warn(
+            `     Original existe: ${originalExists} - ${originalImg}`
+          );
+          console.warn(
+            `     Modified existe: ${modifiedExists} - ${modifiedImg}`
+          );
           results.push({
             page: pageNum,
             hasDifference: true,
@@ -431,24 +499,31 @@ export class PDFComparator {
         try {
           const originalStats = await fs.stat(originalImg);
           const modifiedStats = await fs.stat(modifiedImg);
-          
+
           if (originalStats.size === 0 || modifiedStats.size === 0) {
             console.warn(`  ⚠️ Página ${pageNum}: Imagen vacía detectada`);
             console.warn(`     Original size: ${originalStats.size} bytes`);
             console.warn(`     Modified size: ${modifiedStats.size} bytes`);
           }
         } catch (statError) {
-          console.warn(`  ⚠️ Página ${pageNum}: Error obteniendo estadísticas de imágenes:`, statError.message);
+          console.warn(
+            `  ⚠️ Página ${pageNum}: Error obteniendo estadísticas de imágenes:`,
+            statError.message
+          );
         }
 
         // Comparación con odiff
         // IMPORTANTE: Usar threshold muy bajo (0.001 = 0.1%) para detectar cualquier diferencia
         // odiff-bin threshold es un valor entre 0-1 que representa la diferencia de color permitida
         const odiffThreshold = Math.min(this.options.threshold, 0.001); // Máximo 0.1% de tolerancia
-        
+
         console.log(`  🔍 Comparando página ${pageNum}...`);
-        console.log(`     Threshold usado: ${odiffThreshold} (${(odiffThreshold * 100).toFixed(3)}%)`);
-        
+        console.log(
+          `     Threshold usado: ${odiffThreshold} (${(
+            odiffThreshold * 100
+          ).toFixed(3)}%)`
+        );
+
         const result = await compareImages(originalImg, modifiedImg, diffPath, {
           threshold: odiffThreshold,
           antialiasing: this.options.antialiasing,
@@ -456,26 +531,37 @@ export class PDFComparator {
         });
 
         // Logging detallado del resultado completo
-        console.log(`  📋 Resultado odiff para página ${pageNum}:`, JSON.stringify({
-          match: result.match,
-          diffPercentage: result.diffPercentage,
-          difference: result.difference,
-          threshold: odiffThreshold,
-          // Incluir todas las propiedades del resultado
-          ...result
-        }, null, 2));
+        console.log(
+          `  📋 Resultado odiff para página ${pageNum}:`,
+          JSON.stringify(
+            {
+              match: result.match,
+              diffPercentage: result.diffPercentage,
+              difference: result.difference,
+              threshold: odiffThreshold,
+              // Incluir todas las propiedades del resultado
+              ...result,
+            },
+            null,
+            2
+          )
+        );
 
         // odiff-bin: result.match es false si hay diferencias detectadas
         // Esta es la fuente de verdad principal
         const hasDifference = result.match === false;
-        
+
         // Calcular diffPercentage correctamente
         let diffPercentage = 0;
-        if (result.diffPercentage !== undefined && result.diffPercentage !== null) {
-          let percentage = typeof result.diffPercentage === 'number' 
-            ? result.diffPercentage
-            : parseFloat(result.diffPercentage) || 0;
-          
+        if (
+          result.diffPercentage !== undefined &&
+          result.diffPercentage !== null
+        ) {
+          let percentage =
+            typeof result.diffPercentage === "number"
+              ? result.diffPercentage
+              : parseFloat(result.diffPercentage) || 0;
+
           // odiff-bin devuelve diffPercentage como decimal (0-1) o porcentaje (0-100)
           // Verificar el rango para determinar el formato
           if (percentage > 1 && percentage <= 100) {
@@ -491,7 +577,7 @@ export class PDFComparator {
             // Si es 0 o negativo, mantener en 0
             diffPercentage = 0;
           }
-          
+
           // Limitar entre 0 y 100
           diffPercentage = Math.min(Math.max(diffPercentage, 0), 100);
         }
@@ -499,27 +585,40 @@ export class PDFComparator {
         // VALIDACIÓN CRÍTICA: Si result.match es false, SIEMPRE hay diferencia
         // No importa el diffPercentage, si match es false, hay diferencia
         if (hasDifference && diffPercentage === 0) {
-          console.warn(`  ⚠️ ADVERTENCIA: Página ${pageNum} tiene match=false pero diffPercentage=0. Forzando detección de diferencia.`);
+          console.warn(
+            `  ⚠️ ADVERTENCIA: Página ${pageNum} tiene match=false pero diffPercentage=0. Forzando detección de diferencia.`
+          );
           diffPercentage = 0.01; // Asignar un valor mínimo para indicar diferencia
         }
-        
+
         console.log(`  📊 Página ${pageNum} - Resultado final:`);
         console.log(`     Match: ${result.match}`);
         console.log(`     DiffPercentage (raw): ${result.diffPercentage}`);
-        console.log(`     DiffPercentage (normalizado): ${diffPercentage.toFixed(4)}%`);
+        console.log(
+          `     DiffPercentage (normalizado): ${diffPercentage.toFixed(4)}%`
+        );
         console.log(`     HasDifference: ${hasDifference}`);
 
         // VALIDACIÓN: Verificar que el diffPath se haya generado
         // odiff-bin siempre genera el diffPath si hay diferencias (match=false)
-        const diffExists = await fs.access(diffPath).then(() => true).catch(() => false);
-        
+        const diffExists = await fs
+          .access(diffPath)
+          .then(() => true)
+          .catch(() => false);
+
         if (hasDifference) {
           if (!diffExists) {
-            console.error(`  ❌ ERROR: Página ${pageNum} tiene match=false pero diffPath no existe en: ${diffPath}`);
-            console.error(`     Esto indica un problema con odiff-bin. Verificar que las imágenes sean válidas.`);
+            console.error(
+              `  ❌ ERROR: Página ${pageNum} tiene match=false pero diffPath no existe en: ${diffPath}`
+            );
+            console.error(
+              `     Esto indica un problema con odiff-bin. Verificar que las imágenes sean válidas.`
+            );
           } else {
-            console.log(`  ✅ Diff generado correctamente para página ${pageNum}`);
-            
+            console.log(
+              `  ✅ Diff generado correctamente para página ${pageNum}`
+            );
+
             // Crear imagen con resaltado mejorado
             try {
               await this.createEnhancedHighlight(
@@ -530,7 +629,10 @@ export class PDFComparator {
                 pageNum
               );
             } catch (highlightError) {
-              console.warn(`  ⚠️ Error creando highlight para página ${pageNum}:`, highlightError.message);
+              console.warn(
+                `  ⚠️ Error creando highlight para página ${pageNum}:`,
+                highlightError.message
+              );
             }
           }
         } else {
@@ -538,8 +640,12 @@ export class PDFComparator {
           if (diffExists) {
             const diffStats = await fs.stat(diffPath);
             if (diffStats.size > 0) {
-              console.warn(`  ⚠️ ADVERTENCIA: Página ${pageNum} tiene match=true pero diffPath existe y tiene contenido (${diffStats.size} bytes)`);
-              console.warn(`     Esto puede indicar un falso negativo. Revisar threshold.`);
+              console.warn(
+                `  ⚠️ ADVERTENCIA: Página ${pageNum} tiene match=true pero diffPath existe y tiene contenido (${diffStats.size} bytes)`
+              );
+              console.warn(
+                `     Esto puede indicar un falso negativo. Revisar threshold.`
+              );
             }
           }
         }
@@ -549,8 +655,9 @@ export class PDFComparator {
         const shouldIncludeDiff = hasDifference;
 
         // Asegurar que diffPath se incluya si existe y hay diferencia
-        const finalDiffPath = (hasDifference && diffExists) ? diffPath : null;
-        const finalHighlightPath = (hasDifference && diffExists) ? highlightPath : null;
+        const finalDiffPath = hasDifference && diffExists ? diffPath : null;
+        const finalHighlightPath =
+          hasDifference && diffExists ? highlightPath : null;
 
         results.push({
           page: pageNum,
@@ -561,17 +668,33 @@ export class PDFComparator {
           originalImage: originalImg,
           modifiedImage: modifiedImg,
           // Asegurar que siempre tengamos rutas SVG como fallback
-          originalImageSvg: originalImg ? originalImg.replace('.png', '.svg') : null,
-          modifiedImageSvg: modifiedImg ? modifiedImg.replace('.png', '.svg') : null,
-          diffPathSvg: finalDiffPath ? finalDiffPath.replace('.png', '.svg') : null,
+          originalImageSvg: originalImg
+            ? originalImg.replace(".png", ".svg")
+            : null,
+          modifiedImageSvg: modifiedImg
+            ? modifiedImg.replace(".png", ".svg")
+            : null,
+          diffPathSvg: finalDiffPath
+            ? finalDiffPath.replace(".png", ".svg")
+            : null,
         });
 
         // Logging final claro
         if (hasDifference) {
-          console.log(`  ⚠️ Página ${pageNum}: DIFERENCIA DETECTADA - ${diffPercentage.toFixed(2)}% diferente`);
-          console.log(`     ✅ DiffPath: ${finalDiffPath ? 'Generado' : 'NO generado'}`);
+          console.log(
+            `  ⚠️ Página ${pageNum}: DIFERENCIA DETECTADA - ${diffPercentage.toFixed(
+              2
+            )}% diferente`
+          );
+          console.log(
+            `     ✅ DiffPath: ${finalDiffPath ? "Generado" : "NO generado"}`
+          );
         } else {
-          console.log(`  ✓ Página ${pageNum}: Idéntica (${diffPercentage.toFixed(4)}% diferencia)`);
+          console.log(
+            `  ✓ Página ${pageNum}: Idéntica (${diffPercentage.toFixed(
+              4
+            )}% diferencia)`
+          );
         }
         console.log(`  ──────────────────────────────────────────`);
       } catch (err) {
@@ -583,8 +706,12 @@ export class PDFComparator {
           originalImage: originalImg || originalImagePath,
           modifiedImage: modifiedImg || modifiedImagePath,
           diffPath: null,
-          originalImageSvg: originalImg ? originalImg.replace('.png', '.svg') : null,
-          modifiedImageSvg: modifiedImg ? modifiedImg.replace('.png', '.svg') : null,
+          originalImageSvg: originalImg
+            ? originalImg.replace(".png", ".svg")
+            : null,
+          modifiedImageSvg: modifiedImg
+            ? modifiedImg.replace(".png", ".svg")
+            : null,
         });
       }
     }
@@ -595,13 +722,25 @@ export class PDFComparator {
   /**
    * 🎨 Crea imagen con resaltado mejorado de diferencias
    */
-  async createEnhancedHighlight(originalImg, modifiedImg, diffPath, highlightPath, pageNum) {
+  async createEnhancedHighlight(
+    originalImg,
+    modifiedImg,
+    diffPath,
+    highlightPath,
+    pageNum
+  ) {
     try {
       // Cargar imágenes con sharp
       const [original, modified, diff] = await Promise.all([
-        sharp(originalImg).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
-        sharp(modifiedImg).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
-        sharp(diffPath).raw().toBuffer({ resolveWithObject: true })
+        sharp(originalImg)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true }),
+        sharp(modifiedImg)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true }),
+        sharp(diffPath).raw().toBuffer({ resolveWithObject: true }),
       ]);
 
       const { width, height } = original.info;
@@ -624,13 +763,16 @@ export class PDFComparator {
             highlighted[idx] = this.options.highlightColor.r;
             highlighted[idx + 1] = this.options.highlightColor.g;
             highlighted[idx + 2] = this.options.highlightColor.b;
-            highlighted[idx + 3] = Math.round(this.options.highlightOpacity * 255);
+            highlighted[idx + 3] = Math.round(
+              this.options.highlightOpacity * 255
+            );
           } else {
             // Mantener imagen original con transparencia
             highlighted[idx] = original.data[idx];
             highlighted[idx + 1] = original.data[idx + 1];
             highlighted[idx + 2] = original.data[idx + 2];
-            highlighted[idx + 3] = channels === 4 ? original.data[idx + 3] : 255;
+            highlighted[idx + 3] =
+              channels === 4 ? original.data[idx + 3] : 255;
           }
         }
       }
@@ -640,15 +782,18 @@ export class PDFComparator {
         raw: {
           width,
           height,
-          channels: 4
-        }
+          channels: 4,
+        },
       })
-      .png()
-      .toFile(highlightPath);
+        .png()
+        .toFile(highlightPath);
 
       console.log(`    🎨 Resaltado creado para página ${pageNum}`);
     } catch (error) {
-      console.error(`    ❌ Error creando resaltado para página ${pageNum}:`, error.message);
+      console.error(
+        `    ❌ Error creando resaltado para página ${pageNum}:`,
+        error.message
+      );
       // Fallback: copiar diff original
       await fs.copyFile(diffPath, highlightPath);
     }
@@ -673,7 +818,7 @@ export class PDFComparator {
     const withDiff = differences.filter((d) => d.hasDifference);
     const identical = differences.filter((d) => !d.hasDifference);
 
-    const html =`<!DOCTYPE html>
+    const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
@@ -1077,8 +1222,12 @@ export class PDFComparator {
         </div>
       </div>
       <div class="header-meta">
-        <p><strong>Original:</strong> ${path.basename(metadata.originalPath)} (${metadata.originalPages} páginas)</p>
-        <p><strong>Modificado:</strong> ${path.basename(metadata.modifiedPath)} (${metadata.modifiedPages} páginas)</p>
+        <p><strong>Original:</strong> ${path.basename(
+          metadata.originalPath
+        )} (${metadata.originalPages} páginas)</p>
+        <p><strong>Modificado:</strong> ${path.basename(
+          metadata.modifiedPath
+        )} (${metadata.modifiedPages} páginas)</p>
       </div>
     </div>
 
@@ -1090,7 +1239,10 @@ export class PDFComparator {
           </div>
           <div class="summary-card-icon primary">📄</div>
         </div>
-        <div class="summary-card-value">${Math.max(metadata.originalPages, metadata.modifiedPages)}</div>
+        <div class="summary-card-value">${Math.max(
+          metadata.originalPages,
+          metadata.modifiedPages
+        )}</div>
         <div class="summary-card-description">Total analizadas</div>
       </div>
       
@@ -1121,20 +1273,24 @@ export class PDFComparator {
           <div>
             <div class="summary-card-label">Estado</div>
           </div>
-          <div class="summary-card-icon ${withDiff.length === 0 ? 'success' : 'warning'}">
-            ${withDiff.length === 0 ? '✓' : '⚠️'}
+          <div class="summary-card-icon ${
+            withDiff.length === 0 ? "success" : "warning"
+          }">
+            ${withDiff.length === 0 ? "✓" : "⚠️"}
           </div>
         </div>
         <div class="summary-card-value" style="font-size: 1.5rem;">
-          ${withDiff.length === 0 ? 'Idénticos' : 'Diferentes'}
+          ${withDiff.length === 0 ? "Idénticos" : "Diferentes"}
         </div>
         <div class="summary-card-description">
-          ${withDiff.length === 0 ? 'Sin cambios' : 'Con modificaciones'}
+          ${withDiff.length === 0 ? "Sin cambios" : "Con modificaciones"}
         </div>
       </div>
     </div>
 
-    ${withDiff.length === 0 ? `
+    ${
+      withDiff.length === 0
+        ? `
       <div class="no-differences">
         <div class="no-differences-content">
           <div class="no-differences-icon">✓</div>
@@ -1144,70 +1300,104 @@ export class PDFComparator {
           </div>
         </div>
       </div>
-    ` : `
+    `
+        : `
       <div class="section-title">
         <div class="section-title-icon">🔍</div>
         <h2>Páginas con Diferencias</h2>
       </div>
       
-      ${withDiff.map(d => `
+      ${withDiff
+        .map(
+          (d) => `
         <div class="page-comparison">
           <div class="page-header">
             <span class="page-header-title">Página ${d.page}</span>
-            ${d.diffPercentage !== undefined && d.diffPercentage !== null ? `
+            ${
+              d.diffPercentage !== undefined && d.diffPercentage !== null
+                ? `
               <span class="page-header-badge">
-                ${typeof d.diffPercentage === 'number' ? d.diffPercentage.toFixed(2) : d.diffPercentage}% diferente
+                ${
+                  typeof d.diffPercentage === "number"
+                    ? d.diffPercentage.toFixed(2)
+                    : d.diffPercentage
+                }% diferente
               </span>
-            ` : ''}
+            `
+                : ""
+            }
           </div>
           
           <div class="images-grid">
             <div class="image-container">
               <div class="image-label original">PDF Original</div>
-              <img src="${d.originalImage ? path.relative(outputDir, d.originalImage) : '#'}" 
+              <img src="${
+                d.originalImage
+                  ? path.relative(outputDir, d.originalImage)
+                  : "#"
+              }" 
                    alt="Página ${d.page} Original" 
                    onclick="openModal(this.src)">
             </div>
             
             <div class="image-container">
               <div class="image-label modified">PDF Modificado</div>
-              <img src="${d.modifiedImage ? path.relative(outputDir, d.modifiedImage) : '#'}" 
+              <img src="${
+                d.modifiedImage
+                  ? path.relative(outputDir, d.modifiedImage)
+                  : "#"
+              }" 
                    alt="Página ${d.page} Modificado"
                    onclick="openModal(this.src)">
             </div>
             
-            ${d.highlightPath ? `
+            ${
+              d.highlightPath
+                ? `
             <div class="image-container">
               <div class="image-label highlight">Diferencias Resaltadas</div>
               <img src="${path.relative(outputDir, d.highlightPath)}" 
                    alt="Diferencias resaltadas página ${d.page}"
                    onclick="openModal(this.src)">
             </div>
-            ` : ''}
+            `
+                : ""
+            }
             
-            ${d.diffPath ? `
+            ${
+              d.diffPath
+                ? `
             <div class="image-container">
               <div class="image-label diff">Mapa de Diferencias</div>
               <img src="${path.relative(outputDir, d.diffPath)}" 
                    alt="Diferencias página ${d.page}"
                    onclick="openModal(this.src)">
             </div>
-            ` : ''}
+            `
+                : ""
+            }
           </div>
           
-          ${d.message || d.error ? `
+          ${
+            d.message || d.error
+              ? `
           <div class="diff-info">
             ${d.message || d.error}
           </div>
-          ` : ''}
+          `
+              : ""
+          }
         </div>
-      `).join('')}
-    `}
+      `
+        )
+        .join("")}
+    `
+    }
 
     <div class="timestamp">
-      Reporte generado el ${new Date().toLocaleString('es-ES', { 
-        dateStyle: 'long', 
-        timeStyle: 'medium' 
+      Reporte generado el ${new Date().toLocaleString("es-ES", {
+        dateStyle: "long",
+        timeStyle: "medium",
       })}
     </div>
   </div>
@@ -1234,36 +1424,93 @@ export class PDFComparator {
     });
   </script>
 </body>
-</html>`;;
+</html>`;
 
     await fs.writeFile(reportPath, html, "utf8");
+   
     return reportPath;
   }
 
   async clearFolders() {
-  const folders = [REMOVE_OUTPUT, REMOVE_REPORTS, REMOVE_UPLOADS];
+    const folders = [REMOVE_OUTPUT, REMOVE_REPORTS, REMOVE_UPLOADS, REMOVE_TMP];
 
-  for (const folder of folders) {
-    try {
-      const files = await fs.readdir(folder);
-      
-      const unlinkPromises = files.map(async (file) => {
-        const filePath = path.join(folder, file);
-        const stat = await fs.lstat(filePath);
-        if (stat.isDirectory()) {
-          // Elimina el subdirectorio completo
-          await fs.rm(filePath, { recursive: true, force: true });
-        } else {
-          // Elimina archivo individual
-          await fs.unlink(filePath);
-        }
-      });
+    for (const folder of folders) {
+      try {
+        const files = await fs.readdir(folder);
 
-      await Promise.all(unlinkPromises);
-      console.log(`✅ Carpeta limpiada: ${folder}`);
-    } catch (err) {
-      console.error(`❌ Error limpiando ${folder}:`, err.message);
+        const unlinkPromises = files.map(async (file) => {
+          const filePath = path.join(folder, file);
+          const stat = await fs.lstat(filePath);
+          if (stat.isDirectory()) {
+            // Elimina el subdirectorio completo
+            await fs.rm(filePath, { recursive: true, force: true });
+          } else {
+            // Elimina archivo individual
+            await fs.unlink(filePath);
+          }
+        });
+
+        await Promise.all(unlinkPromises);
+        console.log(`✅ Carpeta limpiada: ${folder}`);
+      } catch (err) {
+        console.error(`❌ Error limpiando ${folder}:`, err.message);
+      }
     }
+  }
+
+
+  
+
+  async generatePDFFromHTML(reportPath, outputDir) {
+    const htmlPathTemp = path.resolve(__dirname, `../${reportPath}`);
+    console.log(`Ruta temporal: ${htmlPathTemp}`);
+    const fileUrl = `file:\\${htmlPathTemp}`;
+    let pdfPath = path.join(outputDir, "comparison_report.pdf");
+    let browser;
+
+    try {
+      browser = await puppeteer.launch(launchOptions);
+      const page = await browser.newPage();
+      await page.setCacheEnabled(false);
+      await page.goto(fileUrl, { waitUntil: "load", timeout: 10000 });
+      await page.emulateMediaType("screen");
+      await page.pdf({
+        path: pdfPath,
+        width: '1920',
+        height: '1080',
+      });
+      return pdfPath;
+    } catch (error) {
+      console.log(`❌ Error al generar PDF: ${error.message}`);
+      throw error;
+    } finally {
+      if (browser) {
+        await browser.close();
+        console.log("🧹 Navegador cerrado.");
+      }
+    }
+  }
+
+
+  async DonwloadPDFReport(res) {
+  try {
+    const pdfPath = path.join(__dirname, "../output/comparison_report.pdf");
+    console.log(pdfPath);
+
+    if (!existsSync(pdfPath)) {
+      return res.status(404).json({ error: "El archivo no existe en el servidor" });
+    }
+
+    return res.download(pdfPath, "reporte.pdf", (err) => {
+      if (err) {
+        console.error("Error al enviar el archivo:", err);
+        return res.status(500).json({ error: "No se pudo enviar el PDF" });
+      }
+    });
+
+  } catch (error) {
+    console.error("Error al procesar la solicitud:", error);
+    return res.status(500).json({ error: "Error interno del servidor" });
   }
 }
 
