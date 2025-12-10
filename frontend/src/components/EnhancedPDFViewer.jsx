@@ -23,7 +23,13 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
   const { differences = [], imagesPath = "", diffPath = "", totalPages = 0 } =
     comparisonData || {};
 
-  // Resetear dimensiones cuando cambia la página
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [startY, setStartY] = useState(0);
+  const [scrollLeftStart, setScrollLeftStart] = useState(0);
+  const [scrollTopStart, setScrollTopStart] = useState(0);
+    
+    // Resetear dimensiones cuando cambia la página
   useEffect(() => {
     setImageDimensions({ width: 0, height: 0 });
   }, [currentPage]);
@@ -58,6 +64,30 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
   const handlePreviousPage = () => setCurrentPage((prev) => Math.max(prev - 1, 1));
   const handleNextPage = () => setCurrentPage((prev) => Math.min(prev + 1, totalPages));
 
+
+  //Funcion para hacer scroll mediante el draging de las imagenes 
+  const handleMouseDown = (e, ref) => {
+  if (zoom <= 100) return; // Solo permitir drag con zoom
+  setIsDragging(true);
+  ref.current.style.cursor = "grabbing";
+  setStartX(e.clientX);
+  setStartY(e.clientY);
+  setScrollLeftStart(ref.current.scrollLeft);
+  setScrollTopStart(ref.current.scrollTop);
+};
+
+  const handleMouseMove = (e, ref) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    ref.current.scrollLeft = scrollLeftStart - dx;
+    ref.current.scrollTop = scrollTopStart - dy;
+  };
+
+  const handleMouseUp = (ref) => {
+    setIsDragging(false);
+    ref.current.style.cursor = "grab";
+  };
   // Función helper para normalizar rutas
   const normalizePath = (path, fallbackPath) => {
     if (!path) return fallbackPath;
@@ -260,6 +290,10 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
             ref={leftScrollRef}
             className="flex flex-1 items-start justify-center overflow-auto p-8 bg-gray-50"
             style={{ cursor: zoom > 100 ? "grab" : "default" }}
+            onMouseDown={(e) => handleMouseDown(e, leftScrollRef)}
+            onMouseMove={(e) => handleMouseMove(e, leftScrollRef)}
+            onMouseUp={(e) => handleMouseUp(e, leftScrollRef)}
+            onMouseLeave={(e) => handleMouseUp(e, leftScrollRef )}
           >
             <div className="relative">
               <img
@@ -288,6 +322,11 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
             ref={rightScrollRef}
             className="flex flex-1 items-start justify-center overflow-auto p-8 relative bg-gray-50"
             style={{ cursor: zoom > 100 ? "grab" : "default" }}
+            onMouseDown={(e) => handleMouseDown(e, rightScrollRef)}
+            onMouseMove={(e) => handleMouseMove(e, rightScrollRef)}
+            onMouseUp={(e) => handleMouseUp(e, rightScrollRef)}
+            onMouseLeave={(e) => handleMouseUp(e, rightScrollRef )}
+
           >
             <div 
               className="relative" 
