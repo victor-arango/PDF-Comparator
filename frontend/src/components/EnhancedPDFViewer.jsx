@@ -29,7 +29,7 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
   const [scrollLeftStart, setScrollLeftStart] = useState(0);
   const [scrollTopStart, setScrollTopStart] = useState(0);
     
-    // Resetear dimensiones cuando cambia la página
+  // Resetear dimensiones cuando cambia la página
   useEffect(() => {
     setImageDimensions({ width: 0, height: 0 });
   }, [currentPage]);
@@ -64,20 +64,20 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
   const handlePreviousPage = () => setCurrentPage((prev) => Math.max(prev - 1, 1));
   const handleNextPage = () => setCurrentPage((prev) => Math.min(prev + 1, totalPages));
 
-
-  //Funcion para hacer scroll mediante el draging de las imagenes 
+  // Función para hacer scroll mediante el dragging de las imágenes
   const handleMouseDown = (e, ref) => {
-  if (zoom <= 100) return; // Solo permitir drag con zoom
-  setIsDragging(true);
-  ref.current.style.cursor = "grabbing";
-  setStartX(e.clientX);
-  setStartY(e.clientY);
-  setScrollLeftStart(ref.current.scrollLeft);
-  setScrollTopStart(ref.current.scrollTop);
-};
+    if (zoom <= 100) return;
+    e.preventDefault();
+    setIsDragging(true);
+    setStartX(e.clientX);
+    setStartY(e.clientY);
+    setScrollLeftStart(ref.current.scrollLeft);
+    setScrollTopStart(ref.current.scrollTop);
+  };
 
   const handleMouseMove = (e, ref) => {
-    if (!isDragging) return;
+    if (!isDragging || !ref.current) return;
+    e.preventDefault();
     const dx = e.clientX - startX;
     const dy = e.clientY - startY;
     ref.current.scrollLeft = scrollLeftStart - dx;
@@ -86,8 +86,8 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
 
   const handleMouseUp = (ref) => {
     setIsDragging(false);
-    ref.current.style.cursor = "grab";
   };
+
   // Función helper para normalizar rutas
   const normalizePath = (path, fallbackPath) => {
     if (!path) return fallbackPath;
@@ -183,7 +183,6 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
 
   return (
     <div className="flex h-screen flex-col bg-gray-50">
-
       {/* Toolbar */}
       <div className="border-b border-gray-200 bg-white px-6 py-4 shadow-sm">
         <div className="flex items-center justify-between">
@@ -288,21 +287,22 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
           </div>
           <div
             ref={leftScrollRef}
-            className="flex flex-1 items-start justify-center overflow-auto p-8 bg-gray-50"
-            style={{ cursor: zoom > 100 ? "grab" : "default" }}
+            className="flex flex-1 items-center justify-center overflow-auto p-8 bg-gray-50"
+            style={{ cursor: zoom > 100 ? (isDragging ? "grabbing" : "grab") : "default" }}
             onMouseDown={(e) => handleMouseDown(e, leftScrollRef)}
             onMouseMove={(e) => handleMouseMove(e, leftScrollRef)}
-            onMouseUp={(e) => handleMouseUp(e, leftScrollRef)}
-            onMouseLeave={(e) => handleMouseUp(e, leftScrollRef )}
+            onMouseUp={() => handleMouseUp(leftScrollRef)}
+            onMouseLeave={() => handleMouseUp(leftScrollRef)}
           >
-            <div className="relative">
+            <div className="inline-block">
               <img
                 src={currentPageData.originalImage}
                 alt="PDF Original"
-                className="max-w-none shadow-xl border border-gray-300 rounded-sm"
+                className="shadow-xl border border-gray-300 rounded-sm block"
                 style={{
-                  transform: `scale(${zoom / 100})`,
-                  transformOrigin: "top left",
+                  width: `${zoom}%`,
+                  height: "auto",
+                  maxWidth: "none",
                 }}
                 onError={(e) => handleImageError(e, currentPageData.originalImageSvg)}
               />
@@ -320,40 +320,27 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
           </div>
           <div
             ref={rightScrollRef}
-            className="flex flex-1 items-start justify-center overflow-auto p-8 relative bg-gray-50"
-            style={{ cursor: zoom > 100 ? "grab" : "default" }}
+            className="flex flex-1 items-center justify-center overflow-auto p-8 relative bg-gray-50"
+            style={{ cursor: zoom > 100 ? (isDragging ? "grabbing" : "grab") : "default" }}
             onMouseDown={(e) => handleMouseDown(e, rightScrollRef)}
             onMouseMove={(e) => handleMouseMove(e, rightScrollRef)}
-            onMouseUp={(e) => handleMouseUp(e, rightScrollRef)}
-            onMouseLeave={(e) => handleMouseUp(e, rightScrollRef )}
-
+            onMouseUp={() => handleMouseUp(rightScrollRef)}
+            onMouseLeave={() => handleMouseUp(rightScrollRef)}
           >
-            <div 
-              className="relative" 
-              style={{ 
-                position: "relative",
-                display: "inline-block",
-                lineHeight: 0
-              }}
-            >
+            <div className="inline-block relative">
               {/* Base Modified Image */}
               <img
                 ref={baseImageRef}
                 src={currentPageData.modifiedImage}
                 alt="PDF Comparado"
-                className="max-w-none shadow-xl border border-gray-300 rounded-sm"
+                className="shadow-xl border border-gray-300 rounded-sm block"
                 style={{
-                  transform: `scale(${zoom / 100})`,
-                  transformOrigin: "top left",
-                  position: "relative",
-                  zIndex: 1,
-                  display: "block",
-                  margin: 0,
-                  padding: 0,
+                  width: `${zoom}%`,
+                  height: "auto",
+                  maxWidth: "none",
                 }}
                 onError={(e) => handleImageError(e, currentPageData.modifiedImageSvg)}
                 onLoad={(e) => {
-                  // Capturar las dimensiones reales de la imagen base
                   const img = e.target;
                   setImageDimensions({
                     width: img.naturalWidth,
@@ -362,38 +349,29 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
                 }}
               />
 
-              {/* Differences Overlay - Debe estar encima de la imagen modificada con z-index mayor */}
+              {/* Differences Overlay */}
               {showDifferences && (currentPageData.highlightPath || currentPageData.diffPath) && imageDimensions.width > 0 && (
                 <div
                   className="absolute top-0 left-0"
                   style={{
-                    transform: `scale(${zoom / 100})`,
-                    transformOrigin: "top left",
-                    zIndex: 10,
-                    position: "absolute",
+                    width: `${zoom}%`,
+                    height: "auto",
                     pointerEvents: "none",
-                    width: `${imageDimensions.width}px`,
-                    height: `${imageDimensions.height}px`,
-                    overflow: "hidden",
                   }}
                 >
-                  {/* Si tenemos highlightPath, usarlo directamente (ya tiene rojo) */}
                   {currentPageData.highlightPath ? (
                     <img
                       src={currentPageData.highlightPath}
                       alt="Diferencias"
-                      className="max-w-none"
                       style={{
                         width: "100%",
-                        height: "100%",
-                        objectFit: "fill",
+                        height: "auto",
+                        display: "block",
                         mixBlendMode: "normal",
                         opacity: 1,
-                        display: "block",
                       }}
                       onError={(e) => {
                         console.warn('Error cargando highlightPath, usando diffPath con filtro rojo');
-                        // Fallback a diffPath con filtro rojo
                         if (currentPageData.diffPath) {
                           e.target.src = currentPageData.diffPath;
                           e.target.style.filter = "brightness(0) saturate(100%) invert(15%) sepia(100%) saturate(7472%) hue-rotate(359deg) brightness(95%) contrast(118%)";
@@ -402,19 +380,13 @@ export default function EnhancedPDFViewer({ comparisonData, onBackToResults }) {
                       }}
                     />
                   ) : (
-                    /* Si solo tenemos diffPath (blanco/negro), aplicar filtro para convertir áreas blancas a rojo */
                     <img
                       src={currentPageData.diffPath}
                       alt="Diferencias"
-                      className="max-w-none"
                       style={{
                         width: "100%",
-                        height: "100%",
-                        objectFit: "fill",
+                        height: "auto",
                         display: "block",
-                        // Convertir áreas blancas (diferencias) a rojo brillante
-                        // El diff tiene blanco donde hay diferencias, negro donde no
-                        // Usamos un filtro que invierte y colorea en rojo
                         filter: "brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(7472%) hue-rotate(359deg) brightness(1.2) contrast(1.2)",
                         mixBlendMode: "screen",
                         opacity: 0.9,
