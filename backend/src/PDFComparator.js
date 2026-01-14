@@ -8,6 +8,7 @@ import { PDFLoader } from "./services/PDFLoader.js";
 import { ImageConverter } from "../src/services/ImageConverter.js";
 import { FileSystemManager } from "./utils/FileSystem.js";
 import path from "path";
+import fs from "fs/promises";
 
 export class PDFComparator extends EventEmitter {
   constructor(options = {}) {
@@ -170,4 +171,34 @@ export class PDFComparator extends EventEmitter {
   async comparePDFs(originalPath, modifiedPath, outputDir = "./output") {
     return this.compare(originalPath, modifiedPath, outputDir);
   }
+
+  //limpia las rutas temporales
+  async clearFolders() {
+    const folders = this.config.paths;
+    for (const property in folders) {
+      const folder = folders[property];
+      console.log(folder);
+      
+      try {
+        const files = await fs.readdir(folder);
+
+        const unlinkPromises = files.map(async (file) => {
+          const filePath = path.join(folder, file);
+          const stat = await fs.lstat(filePath);
+          if (stat.isDirectory()) {
+            await fs.rm(filePath, { recursive: true, force: true });
+          } else {
+            await fs.unlink(filePath);
+          }
+        });
+
+        await Promise.all(unlinkPromises);
+        console.log(`✅ Carpeta limpiada: ${folder}`);
+      } catch (err) {
+        console.error(`❌ Error limpiando ${folder}:`, err.message);
+      }
+    }
+  }
+
+
 }
