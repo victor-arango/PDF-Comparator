@@ -7,6 +7,7 @@ import { BatchProcessor } from "../src/services/BatchProcessor.js";
 import { PDFLoader } from "./services/PDFLoader.js";
 import { ImageConverter } from "../src/services/ImageConverter.js";
 import { FileSystemManager } from "./utils/FileSystem.js";
+import { PDFGenerator } from "./services/PDF-Generator.js";
 import path from "path";
 import fs from "fs/promises";
 
@@ -21,10 +22,14 @@ export class PDFComparator extends EventEmitter {
     this.imageConverter = new ImageConverter(this.config, this.popplerChecker);
     this.imageComparator = new ImageComparator(this.config);
     this.reportGenerator = new ReportGenerator();
+    this.pdfGenerator = new PDFGenerator();
     this.batchProcessor = new BatchProcessor(
       this.config.processing.batchSize,
       this.config.processing.maxConcurrent
     );
+
+    // Almacenar la ruta del último reporte generado
+    this.lastReportPath = null;
 
     // Reenviar eventos del batch processor
     this.batchProcessor.on("batchStart", data => this.emit("batchStart", data));
@@ -72,6 +77,11 @@ export class PDFComparator extends EventEmitter {
         originalPages: originalMeta.pageCount,
         modifiedPages: modifiedMeta.pageCount
       });
+
+      // Guardar la ruta del último reporte generado
+      this.lastReportPath = reportPath;
+
+      console.log(reportPath);
 
       const summary = this.reportGenerator.generateSummary(differences, maxPages);
       console.log("\n" + summary);
@@ -177,7 +187,6 @@ export class PDFComparator extends EventEmitter {
     const folders = this.config.paths;
     for (const property in folders) {
       const folder = folders[property];
-      console.log(folder);
       
       try {
         const files = await fs.readdir(folder);
@@ -200,5 +209,60 @@ export class PDFComparator extends EventEmitter {
     }
   }
 
+  /**
+   * Genera un PDF a partir del último reporte HTML generado
+   * @param {object} res - Objeto de respuesta de Express para enviar el PDF
+   * @param {string} htmlPath - Ruta opcional al archivo HTML (si no se proporciona, busca el último)
+   * @returns {Promise<void>}
+   */
+  async downloadPDFReport(res, htmlPath = null) {
+    try {
+      // Determinar la ruta del HTML a convertir
+      let reportHtmlPath = htmlPath || this.lastReportPath;
+
+      // Si no hay ruta almacenada, buscar el último reporte generado
+      if (!reportHtmlPath) {
+        console.log("🔍 Buscando último reporte HTML generado...");
+        reportHtmlPath = await this.pdfGenerator.findLatestReport(this.config.paths.output);
+      }
+
+      if (!reportHtmlPath) {
+        return res.status(404).json({
+          success: false,
+          message: "No se encontró ningún reporte HTML para convertir a PDF"
+        });
+      }
+
+      console.log(`📄 Convirtiendo reporte HTML a PDF: ${reportHtmlPath}`);
+
+      // Generar el PDF desde el HTML
+      const pdfBuffer = await this.pdfGenerator.generatePDFFromHTML(reportHtmlPath);
+
+      // Cerrar el navegador después de generar el PDF para liberar recursos
+      await this.pdfGenerator.closeBrowser();
+
+      // Enviar el PDF como respuesta
+      const fileName = `comparison-report-${Date.now()}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      res.setHeader("Content-Length", pdfBuffer.length);
+
+      return res.send(pdfBuffer);
+    } catch (error) {
+      console.error("❌ Error generando PDF del reporte:", error);
+      
+      // Cerrar el navegador en caso de error
+      try {
+        await this.pdfGenerator.closeBrowser();
+      } catch (closeError) {
+        console.error("Error cerrando navegador:", closeError);
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: `Error al generar PDF: ${error.message}`
+      });
+    }
+  }
 
 }
